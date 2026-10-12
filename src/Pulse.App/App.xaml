@@ -1,0 +1,22 @@
+﻿<Application x:Class="Pulse.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Pulse.App"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <SolidColorBrush x:Key="WindowBrush" Color="#0B1017" />
+        <SolidColorBrush x:Key="PanelBrush" Color="#111923" />
+        <SolidColorBrush x:Key="PanelBorderBrush" Color="#243241" />
+        <SolidColorBrush x:Key="PrimaryTextBrush" Color="#F2F6FA" />
+        <SolidColorBrush x:Key="SecondaryTextBrush" Color="#8EA0B3" />
+        <SolidColorBrush x:Key="MutedTextBrush" Color="#607286" />
+        <SolidColorBrush x:Key="CpuBrush" Color="#65D6C2" />
+        <SolidColorBrush x:Key="MemoryBrush" Color="#8AA7FF" />
+        <SolidColorBrush x:Key="DiskBrush" Color="#F2B66D" />
+        <SolidColorBrush x:Key="NetworkBrush" Color="#D692E8" />
+        <Style TargetType="TextBlock">
+            <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+            <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+        </Style>
+    </Application.Resources>
+</Application>
