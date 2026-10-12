@@ -2,35 +2,28 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Pulse.App.Controls;
 using Pulse.Core;
 
 namespace Pulse.App;
 
+/// <summary>View only: renders snapshots and history; collection, alerts, recording and settings live in <see cref="AppController"/>.</summary>
 public partial class MainWindow : Window
 {
-    private readonly MetricsEngine _engine = new();
-    private readonly BoundedHistory<double> _cpuHistory = new();
-    private readonly BoundedHistory<double> _memoryHistory = new();
-    private readonly BoundedHistory<double> _gpuHistory = new();
-    private readonly BoundedHistory<double> _thermalHistory = new();
-    private readonly BoundedHistory<double> _diskReadHistory = new();
-    private readonly BoundedHistory<double> _diskWriteHistory = new();
-    private readonly BoundedHistory<double> _networkDownHistory = new();
-    private readonly BoundedHistory<double> _networkUpHistory = new();
+    private readonly AppController _controller;
+    private MetricsSnapshot? _pending;
+    private int _renderQueued;
+    private TimeSpan _span;
     private bool _loaded;
 
-    public MainWindow()
+    public MainWindow(AppController controller)
     {
+        _controller = controller;
         InitializeComponent();
-        CpuChart.Values = _cpuHistory;
-        MemoryChart.Values = _memoryHistory;
-        GpuChart.Values = _gpuHistory;
-        ThermalChart.Values = _thermalHistory;
-        DiskChart.Values = _diskReadHistory;
-        DiskChart.Values2 = _diskWriteHistory;
-        NetworkChart.Values = _networkDownHistory;
-        NetworkChart.Values2 = _networkUpHistory;
-        _engine.SnapshotReady += OnSnapshotReady;
+        _span = controller.Settings.ChartSpan;
+        _controller.Monitor.SnapshotProcessed += OnSnapshotProcessed;
+        _controller.PausedChanged += UpdatePausedUi;
+        _controller.SettingsChanged += OnSettingsChanged;
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -40,24 +33,89 @@ public partial class MainWindow : Window
         FooterMachineName.Text = Environment.MachineName.ToUpperInvariant();
         FooterOS.Text = $"{Environment.OSVersion.VersionString} · {Environment.ProcessorCount} logical processors";
         HeaderSubtitle.Text = $"{Environment.MachineName} · live hardware and operating-system telemetry";
-        _engine.Visible = true;
-        _engine.Start();
+        SyncPickers();
+        UpdatePausedUi();
+        UpdateViewing();
+        if (_controller.SettingsMessage is { } message)
+            MessageBox.Show(this, message, "Pulse settings", MessageBoxButton.OK, MessageBoxImage.Information);
+        if (_controller.Monitor.Latest is { } latest) Render(latest);
     }
 
-    private void Window_StateChanged(object? sender, EventArgs e) =>
-        _engine.Visible = IsVisible && WindowState != WindowState.Minimized;
+    private void Window_StateChanged(object? sender, EventArgs e) => UpdateViewing();
+    private void Window_VisibleChanged(object sender, DependencyPropertyChangedEventArgs e) => UpdateViewing();
 
-    private void Window_Closed(object? sender, EventArgs e)
+    private void UpdateViewing() =>
+        _controller.SetViewing(this, IsVisible && WindowState != WindowState.Minimized);
+
+    private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        _engine.SnapshotReady -= OnSnapshotReady;
-        _engine.Dispose();
+        if (_controller.IsExiting) return;
+        if (_controller.Settings.CloseToTray)
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
+        _controller.Monitor.SnapshotProcessed -= OnSnapshotProcessed;
+        _controller.PausedChanged -= UpdatePausedUi;
+        _controller.SettingsChanged -= OnSettingsChanged;
+        _controller.Exit();
+    }
+
+    private void SyncPickers()
+    {
+        _loaded = false;
+        foreach (ComboBoxItem item in RefreshPicker.Items)
+            if (item.Tag as string == _controller.Settings.RefreshSeconds.ToString(CultureInfo.InvariantCulture)) RefreshPicker.SelectedItem = item;
+        var minutes = (int)_controller.Settings.ChartSpan.TotalMinutes;
+        foreach (ComboBoxItem item in WindowPicker.Items)
+            if (item.Tag as string == minutes.ToString(CultureInfo.InvariantCulture)) WindowPicker.SelectedItem = item;
+        _loaded = true;
+    }
+
+    private void OnSettingsChanged()
+    {
+        _span = _controller.Settings.ChartSpan;
+        SyncPickers();
+        if (_controller.Monitor.Latest is { } s) Render(s);
+    }
+
+    private void UpdatePausedUi()
+    {
+        var paused = _controller.Paused;
+        PausedBadge.Visibility = paused ? Visibility.Visible : Visibility.Collapsed;
+        PauseText.Text = paused ? "Resume collection" : "Pause collection";
+        PauseGlyph.Text = paused ? "\uE768" : "\uE769";
+        Title = paused ? "Pulse — PAUSED" : "Pulse — PC health";
+        if (paused)
+        {
+            ConnectionStatus.Text = "Paused — nothing is being collected";
+            ConnectionDot.Fill = BrushFrom("#F3BD72");
+        }
+    }
+
+    private void Pause_Click(object sender, RoutedEventArgs e) => _controller.TogglePaused();
+
+    private void Tool_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tab }) ToolsWindow.ShowTab(_controller, tab, this);
     }
 
     private void RefreshPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_loaded || RefreshPicker.SelectedItem is not ComboBoxItem { Tag: string value }) return;
-        if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds))
-            _engine.Interval = TimeSpan.FromSeconds(seconds);
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)) return;
+        var s = _controller.Settings;
+        s.RefreshSeconds = seconds;
+        _controller.ApplySettings(s);
+    }
+
+    private void WindowPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded || WindowPicker.SelectedItem is not ComboBoxItem { Tag: string value }) return;
+        var s = _controller.Settings;
+        s.ChartWindow = value switch { "15" => "15m", "60" => "1h", _ => "1m" };
+        _controller.ApplySettings(s);
     }
 
     public static readonly DependencyProperty ScrollPositionProperty = DependencyProperty.Register(
@@ -82,6 +140,12 @@ public partial class MainWindow : Window
             ? 0
             : target.TransformToAncestor((Visual)MainScroll.Content).Transform(new Point(0, 0)).Y - 8;
         offset = Math.Clamp(offset, 0, Math.Max(0, MainScroll.ScrollableHeight));
+        if (_controller.ReduceMotion)
+        {
+            BeginAnimation(ScrollPositionProperty, null);
+            MainScroll.ScrollToVerticalOffset(offset);
+            return;
+        }
         var animation = new System.Windows.Media.Animation.DoubleAnimation(MainScroll.VerticalOffset, offset,
             TimeSpan.FromMilliseconds(380))
         {
@@ -100,49 +164,104 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnSnapshotReady(MetricsSnapshot snapshot)
+    private void OnSnapshotProcessed(MetricsSnapshot snapshot)
     {
-        if (!Dispatcher.HasShutdownStarted)
-            Dispatcher.BeginInvoke(new Action(() => Render(snapshot)));
+        _pending = snapshot;
+        // Coalesce: at most one render is queued; it draws the newest snapshot.
+        if (Interlocked.Exchange(ref _renderQueued, 1) == 0 && !Dispatcher.HasShutdownStarted)
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                Interlocked.Exchange(ref _renderQueued, 0);
+                if (_pending is { } s && IsVisible) Render(s);
+            }));
+    }
+
+    /// <summary>Explains why a value is missing, using the collector's real state and age.</summary>
+    private static string Why(MetricsSnapshot s, string collector, string label)
+    {
+        var st = s.StatusOf(collector);
+        if (st is null) return $"{label}: no status yet";
+        var age = st.Age(s.TimestampUtc);
+        return st.State switch
+        {
+            CollectorState.WarmingUp => $"{label}: warming up — needs two readings",
+            CollectorState.Stale => $"{label}: stale — last good reading {Format.Duration(age ?? TimeSpan.Zero)} ago",
+            CollectorState.Unsupported => $"{label}: not supported on this PC",
+            CollectorState.AccessDenied => $"{label}: Windows denied access",
+            CollectorState.Failing => $"{label}: failing, retrying ({st.ConsecutiveFailures} failures)",
+            _ => $"{label}: no valid reading",
+        };
+    }
+
+    private static string StatsText(IReadOnlyList<HistoryPoint> points, string unit)
+    {
+        var st = SeriesMath.Stats(points);
+        return st is null
+            ? "last minute: no valid samples"
+            : $"last minute · min {st.Min:0}{unit} · avg {st.Average:0}{unit} · max {st.Max:0}{unit} · {st.Count} samples";
+    }
+
+    private void SetChart(TimeChart chart, string id, string? id2, DateTime now)
+    {
+        chart.From = now - _span;
+        chart.To = now;
+        chart.Series = _controller.Monitor.History.Query(id, chart.From, now);
+        if (id2 is not null) chart.Series2 = _controller.Monitor.History.Query(id2, chart.From, now);
     }
 
     private void Render(MetricsSnapshot snapshot)
     {
-        UpdatedAt.Text = $"UPDATED {snapshot.Timestamp:HH:mm:ss}";
-        ConnectionStatus.Text = "Sampling live";
+        var nowUtc = snapshot.TimestampUtc;
+        UpdatedAt.Text = _controller.Paused ? $"PAUSED · last sample {snapshot.Timestamp:HH:mm:ss}" : $"UPDATED {snapshot.Timestamp:HH:mm:ss}";
 
         var health = HealthAssessment.Evaluate(snapshot);
         HealthLabel.Text = health.Level switch
         {
             HealthLevel.Warning => "Needs attention",
-            HealthLevel.Notice => "Under load",
+            HealthLevel.Notice => "Partial coverage",
+            HealthLevel.Unknown => "Insufficient data",
             _ => "Systems calm"
         };
         HealthDot.Fill = health.Level switch
         {
             HealthLevel.Warning => BrushFrom("#F18C83"),
             HealthLevel.Notice => BrushFrom("#F3BD72"),
+            HealthLevel.Unknown => BrushFrom("#718193"),
             _ => BrushFrom("#66DBAA")
         };
         HealthLabel.ToolTip = health.Message;
+        if (!_controller.Paused)
+        {
+            ConnectionStatus.Text = health.Level switch
+            {
+                HealthLevel.Unknown => "Insufficient data",
+                HealthLevel.Notice => "Live · partial coverage",
+                _ => "Live"
+            };
+            ConnectionDot.Fill = BrushFrom(health.Level is HealthLevel.Unknown or HealthLevel.Notice ? "#F3BD72" : "#66DBAA");
+        }
+        ConnectionStatus.ToolTip = health.Message;
+
+        var minute = nowUtc - TimeSpan.FromMinutes(1);
+        var history = _controller.Monitor.History;
 
         if (snapshot.CpuPercent is { } cpu)
         {
-            _cpuHistory.Add(cpu);
             CpuValue.Text = cpu.ToString("0", CultureInfo.CurrentCulture);
-            CpuMeta.Text = $"{LogicalProcessorLabel()} · σ {StandardDeviation(_cpuHistory, 30):0.0} pp";
-            CpuChart.InvalidateVisual();
-            CpuVolatilityValue.Text = $"Load variation σ {StandardDeviation(_cpuHistory, 30):0.0} percentage points · last 30 samples";
+            CpuMeta.Text = $"{Environment.ProcessorCount} logical processors";
+            CpuTrendBadge.Text = "LIVE";
         }
         else
         {
             CpuValue.Text = "—";
-            CpuMeta.Text = "Waiting for a valid CPU interval";
+            CpuMeta.Text = Why(snapshot, CollectorNames.Cpu, "CPU");
+            CpuTrendBadge.Text = "NO DATA";
         }
+        CpuVolatilityValue.Text = StatsText(history.Query(MetricIds.Cpu, minute, nowUtc), "%");
+        SetChart(CpuChart, MetricIds.Cpu, null, nowUtc);
 
         if (snapshot.Memory is { } memory)
         {
-            _memoryHistory.Add(memory.UsedPercent);
             MemoryValue.Text = memory.UsedPercent.ToString("0", CultureInfo.CurrentCulture);
             MemoryMeta.Text = $"{Format.Bytes(memory.UsedBytes)} of {Format.Bytes(memory.TotalBytes)} in use";
             MemoryCommitBadge.Text = $"COMMIT {memory.CommitPercent:0}%";
@@ -160,155 +279,145 @@ public partial class MainWindow : Window
                 NonPagedPoolValue.Text = "—";
                 MemoryInsight.Text = $"{Format.Bytes(memory.CommitUsedBytes)} committed of {Format.Bytes(memory.CommitLimitBytes)} limit. Cache and kernel-pool counters are unavailable.";
             }
-            MemoryChart.InvalidateVisual();
         }
         else
         {
             MemoryValue.Text = "—";
-            MemoryMeta.Text = "Memory counters unavailable";
+            MemoryMeta.Text = Why(snapshot, CollectorNames.Memory, "Memory");
+            MemoryCommitBadge.Text = "COMMIT —";
+            CachedValue.Text = "—";
+            PagedPoolValue.Text = "—";
+            NonPagedPoolValue.Text = "—";
+            MemoryInsight.Text = "Memory counters have no current valid reading.";
         }
+        SetChart(MemoryChart, MetricIds.Memory, null, nowUtc);
 
-        RenderHardware(snapshot.Hardware);
-        RenderDisk(snapshot.DiskIo);
-        RenderNetwork(snapshot.Network);
-        RenderProcesses(snapshot.Top);
+        RenderThermal(snapshot);
+        RenderGpu(snapshot);
+        RenderDisk(snapshot);
+        RenderNetwork(snapshot);
+        RenderProcesses(snapshot);
         RenderSystemCounts(snapshot);
-        RenderBattery(snapshot.Battery);
+        RenderBattery(snapshot);
         RenderDrives(snapshot.Drives);
-
-        CpuChart.InvalidateVisual();
-        MemoryChart.InvalidateVisual();
+        SetChart(ThermalChart, MetricIds.Thermal, null, nowUtc);
+        SetChart(GpuChart, MetricIds.Gpu, null, nowUtc);
+        SetChart(DiskChart, MetricIds.DiskRead, MetricIds.DiskWrite, nowUtc);
+        SetChart(NetworkChart, MetricIds.NetDown, MetricIds.NetUp, nowUtc);
     }
 
-    private void RenderHardware(HardwareSample? hardware)
+    private void RenderThermal(MetricsSnapshot s)
     {
-        if (hardware is null)
+        var st = s.StatusOf(CollectorNames.Thermal);
+        if (s.Thermal is { Zones.Count: > 0 } thermal)
         {
-            ThermalStatus.Text = "CHECKING";
-            ThermalValue.Text = "—";
-            ThermalDescription.Text = "Windows sensor query is starting.";
-            GpuAvailability.Text = "CHECKING";
-            GpuValue.Text = "—";
-            GpuMeta.Text = "Checking Windows GPU counters…";
+            var hottest = thermal.Zones.Max(z => z.Celsius);
+            ThermalValue.Text = $"{hottest:0}°C";
+            var names = string.Join(", ", thermal.Zones.Take(2).Select(z => z.Name));
+            ThermalDescription.Text = $"Hottest of {thermal.Zones.Count} ACPI thermal zone{(thermal.Zones.Count == 1 ? "" : "s")} · {names} · not a CPU or GPU die temperature";
+            ThermalDescription.ToolTip = null;
+            ThermalStatus.Text = "ACPI ZONE";
             return;
         }
-
-        if (hardware.ThermalReadings.Count == 0)
+        ThermalValue.Text = "—";
+        ThermalStatus.Text = st?.State switch
         {
-            _thermalHistory.Clear();
-            ThermalChart.InvalidateVisual();
-            ThermalValue.Text = hardware.ThermalError is null ? "Not exposed" : "Read error";
-            ThermalDescription.Text = hardware.ThermalError is null
-                ? "No ACPI thermal zones were returned by this device's firmware."
-                : "Windows could not query the ACPI thermal-zone provider.";
-            ThermalStatus.Text = hardware.ThermalError is null ? "UNAVAILABLE" : "WMI ERROR";
-            ThermalDescription.ToolTip = hardware.ThermalError;
-        }
-        else
-        {
-            var hottest = hardware.ThermalReadings.Max(reading => reading.Celsius);
-            _thermalHistory.Add(hottest);
-            ThermalValue.Text = $"{hottest:0}°C";
-            var zoneNames = string.Join(", ", hardware.ThermalReadings.Take(2).Select(reading => reading.Name));
-            ThermalDescription.Text = $"{hardware.ThermalReadings.Count} ACPI zone{(hardware.ThermalReadings.Count == 1 ? "" : "s")} · {zoneNames} · highest exposed";
-            ThermalDescription.ToolTip = null;
-            ThermalStatus.Text = "FIRMWARE";
-            ThermalChart.InvalidateVisual();
-        }
-
-        if (hardware.Gpu is null)
-        {
-            _gpuHistory.Clear();
-            GpuChart.InvalidateVisual();
-            GpuAvailability.Text = hardware.GpuError is null ? "UNAVAILABLE" : "WMI ERROR";
-            GpuValue.Text = "—";
-            GpuMeta.Text = hardware.GpuError is null
-                ? "Windows did not publish GPU engine counters."
-                : "Windows could not query GPU engine counters.";
-            GpuMeta.ToolTip = hardware.GpuError;
-        }
-        else
-        {
-            _gpuHistory.Add(hardware.Gpu.UtilizationPercent);
-            GpuAvailability.Text = $"{hardware.Gpu.ActiveEngines} BUSY INSTANCES";
-            GpuValue.Text = hardware.Gpu.UtilizationPercent.ToString("0", CultureInfo.CurrentCulture);
-            GpuMeta.Text = $"Peak {hardware.Gpu.Engine} engine · Windows performance counters";
-            GpuMeta.ToolTip = null;
-            GpuChart.InvalidateVisual();
-        }
+            CollectorState.AccessDenied => "ACCESS DENIED",
+            CollectorState.Unsupported => "UNAVAILABLE",
+            CollectorState.Failing => "ERROR",
+            CollectorState.Stale => "STALE",
+            _ => "CHECKING"
+        };
+        ThermalDescription.Text = Why(s, CollectorNames.Thermal, "ACPI thermal zones");
+        ThermalDescription.ToolTip = st?.Detail;
     }
 
-    private void RenderDisk(DiskIoSample? disk)
+    private void RenderGpu(MetricsSnapshot s)
     {
-        if (disk is null)
+        if (s.Gpu is { } gpu)
+        {
+            GpuAvailability.Text = $"{gpu.ActiveEngines} BUSY INSTANCES";
+            GpuValue.Text = gpu.UtilizationPercent.ToString("0", CultureInfo.CurrentCulture);
+            GpuMeta.Text = $"Peak {gpu.Engine} engine · Windows performance counters";
+            GpuMeta.ToolTip = null;
+            return;
+        }
+        var st = s.StatusOf(CollectorNames.Gpu);
+        GpuAvailability.Text = st?.State switch
+        {
+            CollectorState.AccessDenied => "ACCESS DENIED",
+            CollectorState.Unsupported => "UNAVAILABLE",
+            CollectorState.Failing => "ERROR",
+            CollectorState.Stale => "STALE",
+            _ => "CHECKING"
+        };
+        GpuValue.Text = "—";
+        GpuMeta.Text = Why(s, CollectorNames.Gpu, "GPU engine counters");
+        GpuMeta.ToolTip = st?.Detail;
+    }
+
+    private void RenderDisk(MetricsSnapshot s)
+    {
+        if (s.DiskIo is not { } disk)
         {
             DiskRateValue.Text = "— / —";
-            DiskRateMeta.Text = "Waiting for storage counters";
+            DiskRateMeta.Text = Why(s, CollectorNames.DiskIo, "Storage counters");
             DiskQueueMeta.Text = "Queue depth — · peak drive busy —";
             DiskActiveBadge.Text = "— PEAK";
             return;
         }
-
-        _diskReadHistory.Add(disk.ReadBytesPerSecond);
-        _diskWriteHistory.Add(disk.WriteBytesPerSecond);
         DiskRateValue.Text = $"{Format.Rate(disk.ReadBytesPerSecond)} / {Format.Rate(disk.WriteBytesPerSecond)}";
         DiskRateMeta.Text = "Read / write · bytes per second";
         DiskQueueMeta.Text = $"Queue depth {disk.QueueDepth} · peak drive busy {disk.ActivePercent:0}%";
         DiskActiveBadge.Text = $"{disk.ActivePercent:0}% PEAK";
-        DiskChart.InvalidateVisual();
     }
 
-    private void RenderNetwork(NetworkSample? network)
+    private void RenderNetwork(MetricsSnapshot s)
     {
-        if (network is null)
+        if (s.Network is not { } network)
         {
             NetworkRateValue.Text = "— / —";
-            NetworkRateMeta.Text = "Network counters unavailable";
+            NetworkRateMeta.Text = Why(s, CollectorNames.Network, "Network counters");
             LinkUtilization.Text = "LINK —";
             SessionTransfer.Text = "This session: — received · — sent";
             AdapterRows.Children.Clear();
             return;
         }
-
-        _networkDownHistory.Add(network.DownBytesPerSecond);
-        _networkUpHistory.Add(network.UpBytesPerSecond);
         NetworkRateValue.Text = $"{Format.Rate(network.DownBytesPerSecond)} / {Format.Rate(network.UpBytesPerSecond)}";
         NetworkRateMeta.Text = "↓ received  /  ↑ sent";
-        var linkCapacity = network.Adapters.Sum(adapter => Math.Max(0, adapter.LinkSpeedBitsPerSecond));
+        var linkCapacity = network.Adapters.Sum(a => Math.Max(0, a.LinkSpeedBitsPerSecond));
         var utilization = linkCapacity > 0
             ? (network.DownBytesPerSecond + network.UpBytesPerSecond) * 8 * 100 / linkCapacity
             : 0;
         LinkUtilization.Text = linkCapacity > 0 ? $"LINK {utilization:0.0}%" : "LINK —";
         SessionTransfer.Text = $"This session: ↓ {Format.Bytes(network.SessionDownBytes)} · ↑ {Format.Bytes(network.SessionUpBytes)}";
-        NetworkChart.InvalidateVisual();
         RenderAdapters(network.Adapters);
     }
 
-    private void RenderProcesses(TopProcesses? top)
+    private void RenderProcesses(MetricsSnapshot s)
     {
-        if (top is null)
+        if (s.Top is not { } top)
         {
-            ProcessScanStatus.Text = "SCANNING";
+            ProcessScanStatus.Text = s.StatusOf(CollectorNames.Processes)?.State is CollectorState.AccessDenied or CollectorState.Failing ? "UNAVAILABLE" : "SCANNING";
             CpuProcessRows.Children.Clear();
             MemoryProcessRows.Children.Clear();
+            ProcessChurnValue.Text = "— started · — exited";
             return;
         }
 
-        ProcessScanStatus.Text = "5-SECOND SCAN";
-        RenderProcessRows(CpuProcessRows, top.ByCpu, usage => $"{usage.CpuPercent:0.0}%");
-        RenderProcessRows(MemoryProcessRows, top.ByMemory, usage => Format.Bytes(usage.WorkingSetBytes));
+        var age = _controller.Engine.LastProcessObservationUtc is { } t ? s.TimestampUtc - t : (TimeSpan?)null;
+        ProcessScanStatus.Text = age is { } a && a > TimeSpan.FromSeconds(15) ? $"SCAN {Format.Duration(a)} OLD" : "THROTTLED SCAN";
+        RenderProcessRows(CpuProcessRows, top.ByCpu, u => $"{u.CpuPercent:0.0}%", "No standout process in this scan (or CPU still warming up)");
+        RenderProcessRows(MemoryProcessRows, top.ByMemory, u => Format.Bytes(u.WorkingSetBytes), "No process data");
         ProcessChurnValue.Text = $"{top.StartedLastMinute} started · {top.ExitedLastMinute} exited";
     }
 
-    private void RenderProcessRows(
-        Panel panel,
-        IReadOnlyList<ProcessUsage> processes,
-        Func<ProcessUsage, string> valueFormatter)
+    private static void RenderProcessRows(Panel panel, IReadOnlyList<ProcessUsage> processes, Func<ProcessUsage, string> valueFormatter, string empty)
     {
         panel.Children.Clear();
         if (processes.Count == 0)
         {
-            panel.Children.Add(MakeText("No standout process in this sample", "#718193", 10));
+            panel.Children.Add(MakeText(empty, "#718193", 10));
             return;
         }
 
@@ -345,13 +454,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RenderBattery(BatterySample? battery)
+    private void RenderBattery(MetricsSnapshot s)
     {
-        if (battery is null)
+        if (s.Battery is not { } battery)
         {
-            PowerAvailability.Text = "DESKTOP / NO SENSOR";
-            BatteryValue.Text = "No battery detected";
-            BatteryMeta.Text = "This is normal for an AC-powered desktop.";
+            var st = s.StatusOf(CollectorNames.Battery);
+            var noBattery = st?.State is null or CollectorState.Current or CollectorState.Unsupported;
+            PowerAvailability.Text = noBattery ? "NO BATTERY REPORTED" : "UNAVAILABLE";
+            BatteryValue.Text = noBattery ? "No battery detected" : "Battery state unknown";
+            BatteryMeta.Text = noBattery ? "Normal for an AC-powered desktop." : Why(s, CollectorNames.Battery, "Power status");
             return;
         }
 
@@ -413,28 +524,6 @@ public partial class MainWindow : Window
             grid.Children.Add(rate);
             AdapterRows.Children.Add(grid);
         }
-    }
-
-    private static string LogicalProcessorLabel() =>
-        $"{Environment.ProcessorCount} logical processors";
-
-    private static double StandardDeviation(BoundedHistory<double> history, int sampleCount)
-    {
-        var start = Math.Max(0, history.Count - sampleCount);
-        var count = history.Count - start;
-        if (count < 2) return 0;
-
-        var mean = 0.0;
-        for (var i = start; i < history.Count; i++) mean += history[i];
-        mean /= count;
-
-        var sumSquares = 0.0;
-        for (var i = start; i < history.Count; i++)
-        {
-            var delta = history[i] - mean;
-            sumSquares += delta * delta;
-        }
-        return Math.Sqrt(sumSquares / count);
     }
 
     private static string FormatLinkSpeed(long bitsPerSecond)

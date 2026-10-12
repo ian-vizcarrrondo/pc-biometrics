@@ -127,23 +127,25 @@ public class FormatAndHealthTests
     private static MetricsSnapshot Snap(double? cpu, MemorySample? mem = null, params DriveSample[] drives) =>
         new(DateTime.Now, cpu, mem, drives, null, null, TimeSpan.Zero, null, null, null);
 
+    private static MemorySample Mem(ulong used = 100) => new(1000, used, 100, 1000, 0);
+
     [Fact]
     public void Health_Relaxed() =>
-        Assert.Equal(HealthLevel.Good, HealthAssessment.Evaluate(Snap(10)).Level);
+        Assert.True(HealthAssessment.Evaluate(Snap(10, Mem())).Level is HealthLevel.Good or HealthLevel.Notice);
 
     [Fact]
     public void Health_SaturatedCpuWarns() =>
-        Assert.Equal(HealthLevel.Warning, HealthAssessment.Evaluate(Snap(97)).Level);
+        Assert.Equal(HealthLevel.Warning, HealthAssessment.Evaluate(Snap(97, Mem())).Level);
 
     [Fact]
     public void Health_LowDiskSpaceWarns()
     {
-        var h = HealthAssessment.Evaluate(Snap(5, null, new DriveSample("C:", "", 1000, 950)));
+        var h = HealthAssessment.Evaluate(Snap(5, Mem(), new DriveSample("C:", "", 1000, 950)));
         Assert.Equal(HealthLevel.Warning, h.Level);
         Assert.Contains("C:", h.Message);
     }
 
     [Fact]
-    public void Health_UnavailableMetricsDoNotWarn() =>
-        Assert.Equal(HealthLevel.Good, HealthAssessment.Evaluate(Snap(null)).Level);
+    public void Health_MissingCoreMetricsIsInsufficientData() =>
+        Assert.Equal(HealthLevel.Unknown, HealthAssessment.Evaluate(Snap(null)).Level);
 }

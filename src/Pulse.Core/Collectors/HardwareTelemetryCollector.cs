@@ -11,26 +11,22 @@ namespace Pulse.Core.Collectors;
 /// </summary>
 public sealed class HardwareTelemetryCollector
 {
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(5);
-    private DateTime _lastRefresh = DateTime.MinValue;
-    private HardwareSample _last = new([], null);
-
-    public HardwareSample Sample()
+    public CollectResult<ThermalReadings> SampleThermal()
     {
-        if (!OperatingSystem.IsWindows()) return new HardwareSample([], null);
-        if (DateTime.UtcNow - _lastRefresh < RefreshInterval) return _last;
+        if (!OperatingSystem.IsWindows()) return CollectResult<ThermalReadings>.Unsupported("Windows only");
+        var zones = ReadThermalZones();
+        return zones.Count == 0
+            ? CollectResult<ThermalReadings>.Unsupported("Windows reports no ACPI thermal zones")
+            : CollectResult<ThermalReadings>.Ok(new ThermalReadings(zones));
+    }
 
-        IReadOnlyList<ThermalReading> thermal = [];
-        GpuActivity? gpu = null;
-        string? thermalError = null, gpuError = null;
-        try { thermal = ReadThermalZones(); }
-        catch (COMException error) { thermalError = error.Message; }
-        try { gpu = ReadGpuActivity(); }
-        catch (COMException error) { gpuError = error.Message; }
-
-        _last = new HardwareSample(thermal, gpu, thermalError, gpuError);
-        _lastRefresh = DateTime.UtcNow;
-        return _last;
+    public CollectResult<GpuActivity> SampleGpu()
+    {
+        if (!OperatingSystem.IsWindows()) return CollectResult<GpuActivity>.Unsupported("Windows only");
+        var gpu = ReadGpuActivity();
+        return gpu is null
+            ? CollectResult<GpuActivity>.Unsupported("No GPU engine counters exposed")
+            : CollectResult<GpuActivity>.Ok(gpu);
     }
 
     [SupportedOSPlatform("windows")]

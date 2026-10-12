@@ -7,7 +7,7 @@
         Background="#0B1017" Foreground="#EDF3F8" FontFamily="Segoe UI Variable Text, Segoe UI"
         TextOptions.TextFormattingMode="Ideal" UseLayoutRounding="True"
         WindowStartupLocation="CenterScreen"
-        Loaded="Window_Loaded" StateChanged="Window_StateChanged" Closed="Window_Closed">
+        Loaded="Window_Loaded" StateChanged="Window_StateChanged" IsVisibleChanged="Window_VisibleChanged" Closing="Window_Closing">
     <Window.Resources>
         <SolidColorBrush x:Key="TextPrimary" Color="#EDF3F8"/>
         <SolidColorBrush x:Key="TextMuted" Color="#8C9AA8"/>
@@ -80,13 +80,39 @@
                     <Button x:Name="NavNetwork" Style="{StaticResource NavButton}" Click="Network_Click">
                         <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE839;" FontFamily="Segoe MDL2 Assets" Width="28" FontSize="15"/><TextBlock Text="Network"/></StackPanel>
                     </Button>
+                    <TextBlock Text="TOOLS" FontSize="9" FontWeight="Bold" Foreground="#657687" Margin="11,18,0,9"/>
+                    <Button x:Name="ToolAlerts" Style="{StaticResource NavButton}" Click="Tool_Click" Tag="Alerts" AutomationProperties.Name="Open alerts">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" Width="28" FontSize="15"/><TextBlock x:Name="AlertsNavText" Text="Alerts"/></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource NavButton}" Click="Tool_Click" Tag="History" AutomationProperties.Name="Open history and recording">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" Width="28" FontSize="15"/><TextBlock Text="History &amp; recording"/></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource NavButton}" Click="Tool_Click" Tag="Processes" AutomationProperties.Name="Open process inspector">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" Width="28" FontSize="15"/><TextBlock Text="Process inspector"/></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource NavButton}" Click="Tool_Click" Tag="Diagnostics" AutomationProperties.Name="Open diagnostics">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE9D9;" FontFamily="Segoe MDL2 Assets" Width="28" FontSize="15"/><TextBlock Text="Diagnostics"/></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource NavButton}" Click="Tool_Click" Tag="Settings" AutomationProperties.Name="Open settings">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" Width="28" FontSize="15"/><TextBlock Text="Settings"/></StackPanel>
+                    </Button>
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Bottom">
                     <Border Height="1" Background="#24313D" Margin="4,0,4,16"/>
+                    <Button x:Name="PauseButton" Style="{StaticResource NavButton}" Click="Pause_Click" AutomationProperties.Name="Pause or resume collection" Margin="0,0,0,12">
+                        <StackPanel Orientation="Horizontal"><TextBlock x:Name="PauseGlyph" Text="&#xE769;" FontFamily="Segoe MDL2 Assets" Width="28" FontSize="15"/><TextBlock x:Name="PauseText" Text="Pause collection"/></StackPanel>
+                    </Button>
+                    <TextBlock Text="CHART WINDOW" FontSize="9" FontWeight="Bold" Foreground="#657687" Margin="10,0,0,7"/>
+                    <ComboBox x:Name="WindowPicker" SelectedIndex="0" SelectionChanged="WindowPicker_SelectionChanged" Margin="0,0,0,14"
+                              Background="#DCE6EE" Foreground="#0B1218" BorderBrush="#2A3946" Padding="8,6" FontSize="12" AutomationProperties.Name="Chart time window">
+                        <ComboBoxItem Content="Last 1 minute" Tag="1"/>
+                        <ComboBoxItem Content="Last 15 minutes" Tag="15"/>
+                        <ComboBoxItem Content="Last 1 hour" Tag="60"/>
+                    </ComboBox>
                     <TextBlock Text="REFRESH RATE" FontSize="9" FontWeight="Bold" Foreground="#657687" Margin="10,0,0,7"/>
                     <ComboBox x:Name="RefreshPicker" SelectedIndex="1" SelectionChanged="RefreshPicker_SelectionChanged"
-                              Background="#17212B" Foreground="#D8E2EB" BorderBrush="#2A3946" Padding="8,6"
+                              Background="#DCE6EE" Foreground="#0B1218" BorderBrush="#2A3946" Padding="8,6"
                               FontSize="12">
                         <ComboBoxItem Content="1 second" Tag="1"/>
                         <ComboBoxItem Content="2 seconds" Tag="2"/>
@@ -95,8 +121,8 @@
                     <Border Background="#14251F" BorderBrush="#244638" BorderThickness="1" CornerRadius="9" Padding="11" Margin="0,17,0,0">
                         <StackPanel>
                             <StackPanel Orientation="Horizontal">
-                                <Ellipse Width="7" Height="7" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                <TextBlock x:Name="ConnectionStatus" Text="Starting sensors" FontSize="11" Foreground="#C9EBDD"/>
+                                <Ellipse x:Name="ConnectionDot" Width="7" Height="7" Fill="{StaticResource Amber}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="ConnectionStatus" Text="Starting sensors" FontSize="11" Foreground="#C9EBDD" TextWrapping="Wrap"/>
                             </StackPanel>
                             <TextBlock Text="On-device telemetry · no account" FontSize="9" Foreground="#799286" Margin="15,5,0,0"/>
                         </StackPanel>
@@ -117,6 +143,9 @@
                         <TextBlock x:Name="HeaderSubtitle" Text="A clear, live view of what your machine is doing." FontSize="12" Foreground="{StaticResource TextMuted}" Margin="1,5,0,0"/>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border x:Name="PausedBadge" Visibility="Collapsed" Background="#3A2A12" BorderBrush="#7A5A22" BorderThickness="1" CornerRadius="18" Padding="11,7" Margin="0,0,9,0">
+                            <TextBlock Text="PAUSED · not collecting" FontSize="10" FontWeight="Bold" Foreground="#F3BD72"/>
+                        </Border>
                         <Border Background="#151E28" BorderBrush="#293743" BorderThickness="1" CornerRadius="18" Padding="11,7" Margin="0,0,9,0">
                             <StackPanel Orientation="Horizontal">
                                 <Ellipse x:Name="HealthDot" Width="7" Height="7" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,7,0"/>
@@ -133,7 +162,7 @@
                     <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="0,0,7,0">
                         <Grid>
                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="68"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                            <DockPanel>
+                            <DockPanel LastChildFill="False">
                                 <TextBlock Text="PROCESSOR LOAD" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock x:Name="CpuTrendBadge" DockPanel.Dock="Right" Text="LIVE" FontSize="9" Foreground="{StaticResource Cyan}"/>
                             </DockPanel>
@@ -141,14 +170,14 @@
                                 <TextBlock x:Name="CpuValue" Text="—" FontSize="31" FontWeight="Light"/>
                                 <TextBlock Text="%" FontSize="14" Foreground="{StaticResource TextMuted}" VerticalAlignment="Bottom" Margin="3,0,0,6"/>
                             </StackPanel>
-                            <controls:Sparkline x:Name="CpuChart" Grid.Row="2" Stroke="#68D6E4" FixedMax="100" Margin="0,0,0,2"/>
+                            <controls:TimeChart x:Name="CpuChart" Grid.Row="2" Stroke="#68D6E4" FixedMax="100" Margin="0,0,0,2"/>
                             <TextBlock x:Name="CpuMeta" Grid.Row="3" Text="Collecting first interval…" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                         </Grid>
                     </Border>
                     <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="7,0">
                         <Grid>
                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="68"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                            <DockPanel>
+                            <DockPanel LastChildFill="False">
                                 <TextBlock Text="PHYSICAL MEMORY" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock x:Name="MemoryCommitBadge" DockPanel.Dock="Right" Text="COMMIT —" FontSize="9" Foreground="{StaticResource Blue}"/>
                             </DockPanel>
@@ -156,14 +185,14 @@
                                 <TextBlock x:Name="MemoryValue" Text="—" FontSize="31" FontWeight="Light"/>
                                 <TextBlock Text="%" FontSize="14" Foreground="{StaticResource TextMuted}" VerticalAlignment="Bottom" Margin="3,0,0,6"/>
                             </StackPanel>
-                            <controls:Sparkline x:Name="MemoryChart" Grid.Row="2" Stroke="#79AFFF" FixedMax="100" Margin="0,0,0,2"/>
+                            <controls:TimeChart x:Name="MemoryChart" Grid.Row="2" Stroke="#79AFFF" FixedMax="100" Margin="0,0,0,2"/>
                             <TextBlock x:Name="MemoryMeta" Grid.Row="3" Text="Waiting for memory counters…" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                         </Grid>
                     </Border>
                     <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="7,0,0,0">
                         <Grid>
                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="68"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                            <DockPanel>
+                            <DockPanel LastChildFill="False">
                                 <TextBlock Text="GPU ENGINE" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock x:Name="GpuAvailability" DockPanel.Dock="Right" Text="WMI" FontSize="9" Foreground="#A78AEF"/>
                             </DockPanel>
@@ -171,7 +200,7 @@
                                 <TextBlock x:Name="GpuValue" Text="—" FontSize="31" FontWeight="Light"/>
                                 <TextBlock Text="%" FontSize="14" Foreground="{StaticResource TextMuted}" VerticalAlignment="Bottom" Margin="3,0,0,6"/>
                             </StackPanel>
-                            <controls:Sparkline x:Name="GpuChart" Grid.Row="2" Stroke="#BAA3FF" FixedMax="100" Margin="0,0,0,2"/>
+                            <controls:TimeChart x:Name="GpuChart" Grid.Row="2" Stroke="#BAA3FF" FixedMax="100" Margin="0,0,0,2"/>
                             <TextBlock x:Name="GpuMeta" Grid.Row="3" Text="Checking Windows GPU counters…" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                         </Grid>
                     </Border>
@@ -181,37 +210,37 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="1.05*"/><ColumnDefinition Width="1*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
                     <Border Grid.Column="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="0,0,7,0">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,11">
+                            <DockPanel LastChildFill="False" Margin="0,0,0,11">
                                 <TextBlock Text="THERMAL SENSORS" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock x:Name="ThermalStatus" DockPanel.Dock="Right" Text="ACPI" FontSize="9" Foreground="{StaticResource Amber}"/>
                             </DockPanel>
                             <TextBlock x:Name="ThermalValue" Text="—" FontSize="25" FontWeight="Light"/>
                             <TextBlock x:Name="ThermalDescription" Text="Waiting for exposed thermal zones…" FontSize="10" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,2,0,8"/>
-                            <controls:Sparkline x:Name="ThermalChart" Height="49" Stroke="#F3BD72" FixedMax="100"/>
+                            <controls:TimeChart Unit="°C" x:Name="ThermalChart" Height="49" Stroke="#F3BD72" FixedMax="100"/>
                             <TextBlock Text="ACPI zones are not guaranteed to be CPU/GPU package sensors." FontSize="9" Foreground="#718193" TextWrapping="Wrap" Margin="0,7,0,0"/>
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="1" Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="7,0">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,11">
+                            <DockPanel LastChildFill="False" Margin="0,0,0,11">
                                 <TextBlock Text="STORAGE ACTIVITY" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock x:Name="DiskActiveBadge" DockPanel.Dock="Right" Text="— PEAK" FontSize="9" Foreground="{StaticResource Green}"/>
                             </DockPanel>
                             <TextBlock x:Name="DiskRateValue" Text="—" FontSize="25" FontWeight="Light"/>
                             <TextBlock x:Name="DiskRateMeta" Text="Read / write throughput" FontSize="10" Foreground="{StaticResource TextMuted}" Margin="0,2,0,8"/>
-                            <controls:Sparkline x:Name="DiskChart" Height="49" Stroke="#66DBAA" Stroke2="#79AFFF"/>
+                            <controls:TimeChart Unit="B/s" x:Name="DiskChart" Height="49" Stroke="#66DBAA" Stroke2="#79AFFF"/>
                             <TextBlock x:Name="DiskQueueMeta" Text="Queue depth — · peak drive busy —" FontSize="9" Foreground="#718193" Margin="0,7,0,0"/>
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="7,0,0,0">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,11">
+                            <DockPanel LastChildFill="False" Margin="0,0,0,11">
                                 <TextBlock Text="NETWORK FLOW" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock x:Name="LinkUtilization" DockPanel.Dock="Right" Text="LINK —" FontSize="9" Foreground="{StaticResource Blue}"/>
                             </DockPanel>
                             <TextBlock x:Name="NetworkRateValue" Text="—" FontSize="25" FontWeight="Light"/>
                             <TextBlock x:Name="NetworkRateMeta" Text="↓ receive   ↑ send" FontSize="10" Foreground="{StaticResource TextMuted}" Margin="0,2,0,8"/>
-                            <controls:Sparkline x:Name="NetworkChart" Height="49" Stroke="#68D6E4" Stroke2="#BAA3FF"/>
+                            <controls:TimeChart Unit="B/s" x:Name="NetworkChart" Height="49" Stroke="#68D6E4" Stroke2="#BAA3FF"/>
                             <TextBlock x:Name="SessionTransfer" Text="This session: — received · — sent" FontSize="9" Foreground="#718193" Margin="0,7,0,0"/>
                         </StackPanel>
                     </Border>
@@ -221,7 +250,7 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="1*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
                     <Border Grid.Column="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="0,0,7,0">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,12">
+                            <DockPanel LastChildFill="False" Margin="0,0,0,12">
                                 <TextBlock Text="PROCESS SPOTLIGHT" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock x:Name="ProcessScanStatus" DockPanel.Dock="Right" Text="LIVE" FontSize="9" Foreground="{StaticResource Green}"/>
                             </DockPanel>
@@ -272,7 +301,7 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="1.25*"/><ColumnDefinition Width="1*"/><ColumnDefinition Width="0.9*"/></Grid.ColumnDefinitions>
                     <Border Grid.Column="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="0,0,7,0">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,11">
+                            <DockPanel LastChildFill="False" Margin="0,0,0,11">
                                 <TextBlock Text="PHYSICAL NETWORK ADAPTERS" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock Text="virtual + VPN links excluded" FontSize="9" Foreground="#718193" DockPanel.Dock="Right"/>
                             </DockPanel>
@@ -281,7 +310,7 @@
                     </Border>
                     <Border Grid.Column="1" Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="7,0">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,11">
+                            <DockPanel LastChildFill="False" Margin="0,0,0,11">
                                 <TextBlock Text="LOCAL VOLUMES" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock Text="FREE SPACE" FontSize="8" Foreground="#718193" DockPanel.Dock="Right"/>
                             </DockPanel>
@@ -290,7 +319,7 @@
                     </Border>
                     <Border Grid.Column="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="13" Padding="17" Margin="7,0,0,0">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,9">
+                            <DockPanel LastChildFill="False" Margin="0,0,0,9">
                                 <TextBlock Text="POWER &amp; SESSION" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}"/>
                                 <TextBlock x:Name="PowerAvailability" DockPanel.Dock="Right" Text="—" FontSize="9" Foreground="{StaticResource Amber}"/>
                             </DockPanel>

@@ -74,19 +74,34 @@ public sealed class DiskIoCollector : IDisposable
         public Native.DiskPerformance? Previous;
     }
 
+    private sealed record Retry(DateTime At, int Failures, bool Denied);
+
     private readonly Dictionary<string, Volume> _volumes = new();
-    private readonly HashSet<string> _failed = new();
+    private readonly Dictionary<string, Retry> _failed = new();
+    private readonly IClock _clock;
+
+    public DiskIoCollector(IClock? clock = null) => _clock = clock ?? SystemClock.Instance;
 
     public void Reset()
     {
         foreach (var v in _volumes.Values) v.Previous = null;
+        _failed.Clear();
     }
 
-    public DiskIoSample? Sample(IReadOnlyList<DriveSample> drives)
+    private void MarkFailed(string name, bool denied)
     {
+        var failures = _failed.TryGetValue(name, out var r) ? r.Failures + 1 : 1;
+        var seconds = Math.Min(600, 30 * Math.Pow(2, Math.Min(failures - 1, 6)));
+        _failed[name] = new Retry(_clock.UtcNow.AddSeconds(seconds), failures, denied);
+    }
+
+    public CollectResult<DiskIoSample> Sample(IReadOnlyList<DriveSample> drives)
+    {
+        if (drives.Count == 0) return CollectResult<DiskIoSample>.Unsupported("No fixed drives found");
         double read = 0, write = 0, active = 0;
         uint queueDepth = 0;
         var any = false;
+        var opened = 0;
         var live = new HashSet<string>();
 
         foreach (var drive in drives)
@@ -94,11 +109,17 @@ public sealed class DiskIoCollector : IDisposable
             live.Add(drive.Name);
             if (!_volumes.TryGetValue(drive.Name, out var volume))
             {
-                if (_failed.Contains(drive.Name)) continue;
+                if (_failed.TryGetValue(drive.Name, out var retry) && _clock.UtcNow < retry.At) continue;
                 var handle = Native.CreateFileW($@"\\.\{drive.Name}", 0, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
-                if (handle.IsInvalid) { handle.Dispose(); _failed.Add(drive.Name); continue; }
+                if (handle.IsInvalid)
+                {
+                    MarkFailed(drive.Name, Marshal.GetLastWin32Error() == 5);
+                    handle.Dispose();
+                    continue;
+                }
                 volume = new Volume(handle);
                 _volumes[drive.Name] = volume;
+                _failed.Remove(drive.Name);
             }
 
             if (!Native.DeviceIoControl(volume.Handle, Native.IoctlDiskPerformance, IntPtr.Zero, 0, out var cur,
@@ -106,10 +127,11 @@ public sealed class DiskIoCollector : IDisposable
             {
                 volume.Handle.Dispose();
                 _volumes.Remove(drive.Name);
-                _failed.Add(drive.Name);
+                MarkFailed(drive.Name, false);
                 continue;
             }
 
+            opened++;
             queueDepth += cur.QueueDepth;
             var prev = volume.Previous;
             volume.Previous = cur;
@@ -133,8 +155,14 @@ public sealed class DiskIoCollector : IDisposable
             _volumes[gone].Handle.Dispose();
             _volumes.Remove(gone);
         }
+        foreach (var gone in _failed.Keys.Where(k => !live.Contains(k)).ToList()) _failed.Remove(gone);
 
-        return any ? new DiskIoSample(read, write, active, queueDepth) : null;
+        if (any) return CollectResult<DiskIoSample>.Ok(new DiskIoSample(read, write, active, queueDepth));
+        if (opened > 0) return CollectResult<DiskIoSample>.Warming();
+        var denied = _failed.Count > 0 && _failed.Values.All(f => f.Denied);
+        return denied
+            ? CollectResult<DiskIoSample>.Denied("Windows denied access to volume performance counters")
+            : CollectResult<DiskIoSample>.Failed("Volume performance counters could not be opened");
     }
 
     public void Dispose()

@@ -1,46 +1,91 @@
-# 💓 Pulse
+# Pulse PC Monitor
 
-A fast, good-looking live dashboard for your Windows PC. See CPU, memory, GPU, disk, network and process activity at a glance, plus details most monitors skip. 🖥️✨
+Pulse is a lightweight Windows desktop biometrics monitor built with **.NET 10 + WPF**.
 
-Everything runs on your device. No account, no cloud, no telemetry leaves your machine.
+It focuses on real, useful system telemetry with low overhead and a compact modern dark UI:
 
-## Install
+- Overall CPU usage
+- Used/total physical RAM
+- Used/total local fixed-drive space
+- Network download/upload rates for active physical adapters
+- System uptime
+- Rolling charts (bounded to the latest 60 samples)
+- Tray icon, minimize-to-tray, explicit Exit action
 
-1. Download `Pulse-win-x64.zip` from the [latest release](https://github.com/ian-vizcarrrondo/pc-biometrics/releases/latest).
-2. Unzip it anywhere and double-click `Pulse.App.exe`.
+No Electron, no embedded browser, no cloud services, no telemetry, and no admin requirement.
 
-Requires Windows 10/11 and the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0).
+## Prerequisites
 
-**From source:** `dotnet run --project src/Pulse.App`
+- Windows 10 or 11
+- .NET 10 SDK (for building)
+- .NET 10 Desktop Runtime (for running published binaries)
 
-## What you see
+## Build
 
-| Area | Details |
-|---|---|
-| **CPU** | Live load, plus load variation (σ) over the last 30 samples |
-| **Memory** | Usage, file cache, and kernel paged / non-paged pools |
-| **GPU** | Engine utilization and how many engine instances are busy |
-| **Thermals** | ACPI thermal zones when Windows exposes them |
-| **Storage** | Read/write throughput, disk queue depth, per-drive space |
-| **Network** | Down/up rates, adapters, link speed and utilization |
-| **Processes** | Top consumers, plus processes started and exited per minute |
-| **Power** | Battery and power state |
-
-Refresh every 1, 2 or 5 seconds. The sidebar scrolls smoothly to each section.
-
-## Honest by design
-
-If a sensor isn't available, Pulse says so instead of inventing a number. Some PCs block the ACPI thermal query without admin rights, and then the temperature card shows as unavailable. Thermal zones are never presented as CPU or GPU package temperatures.
-
-## Build and test
-
-```
-dotnet build Pulse.sln
-dotnet test Pulse.sln
+```powershell
+dotnet build Pulse.sln -c Release
 ```
 
-Layout: `src/Pulse.Core` (collectors and metrics engine), `src/Pulse.App` (WPF UI), `tests/Pulse.Tests` (xUnit). The original web prototype is in [`docs/index.html`](docs/index.html).
+## Run from source
+
+```powershell
+dotnet run --project src/Pulse.App -c Release
+```
+
+## Test
+
+```powershell
+dotnet test Pulse.sln -c Release
+```
+
+## Publish executable (folder output)
+
+```powershell
+dotnet publish src/Pulse.App/Pulse.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -o .\publish\Pulse-win-x64
+```
+
+Published executable path:
+
+- `publish\Pulse-win-x64\Pulse.App.exe`
+
+## Metric definitions
+
+- **CPU %**: overall processor busy percentage from Windows system time counters.
+- **RAM used/total**: physical memory in use and total physical memory.
+- **Disk used/total**: sum of local fixed drives that are ready.
+- **Network down/up**: bytes-per-second rate from cumulative adapter byte counters on active physical adapters.
+- **Uptime**: elapsed system time since last reboot.
+- **Charts**: rolling 60-sample histories (bounded ring buffers) for CPU, RAM, and network.
+
+## Efficiency design
+
+- Collection runs asynchronously without blocking UI.
+- Collectors are reused; counters are not recreated each refresh.
+- Histories are bounded (60 samples).
+- Polling slows while hidden/minimized.
+- No continuous animations, no background service, no periodic disk writes for live monitoring.
+- Baselines reset gracefully on sleep/resume and network changes.
+- Timers, collectors, and tray resources are disposed on exit.
+
+## Limitations
+
+- Network rates are reported only for adapters that are active and classified as physical.
+- Some counters may briefly show unavailable/warming states right after startup/resume.
+- Small differences versus Task Manager are expected due to sampling interval and timing.
+
+## Future optional features (not in v1 scope)
+
+- GPU utilization panels
+- Temperature monitoring
+- Additional hardware-sensor integrations
+
+## Repository layout
+
+- `src/Pulse.Core`: metric collection, calculations, and monitoring pipeline
+- `src/Pulse.App`: WPF UI, tray behavior, and app shell
+- `tests/Pulse.Tests`: unit tests for math, resets, and bounded history behavior
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE). Free for personal and noncommercial use.
+MIT (see [LICENSE](./LICENSE)).
+
